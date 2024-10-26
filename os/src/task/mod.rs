@@ -16,8 +16,12 @@ mod task;
 
 use crate::loader::{get_app_data, get_num_app};
 use crate::sync::UPSafeCell;
+use crate::syscall::process::TaskInfo;
+use crate::timer::get_time_ms;
 use crate::trap::TrapContext;
+
 use alloc::vec::Vec;
+
 use lazy_static::*;
 use switch::__switch;
 pub use task::{TaskControlBlock, TaskStatus};
@@ -43,9 +47,9 @@ pub struct TaskManager {
 /// The task manager inner in 'UPSafeCell'
 struct TaskManagerInner {
     /// task list
-    tasks: Vec<TaskControlBlock>,
+    pub tasks: Vec<TaskControlBlock>,
     /// id of current `Running` task
-    current_task: usize,
+    pub current_task: usize,
 }
 
 lazy_static! {
@@ -132,8 +136,20 @@ impl TaskManager {
         let cur = inner.current_task;
         inner.tasks[cur].change_program_brk(size)
     }
+    /// mmap the current 'Running' task's program
+    pub fn mmap_current_program(&self, start: usize, len: usize, port: usize) -> Option<usize> {
+        let mut inner = self.inner.exclusive_access();
+        let cur = inner.current_task;
+        inner.tasks[cur].mmap_program(start, len, port)
+    }
+    /// munmap the current 'Running' task's program
+    pub fn munmap_current_program(&self, start: usize, len: usize) -> Option<usize> {
+        let mut inner = self.inner.exclusive_access();
+        let cur = inner.current_task;
+        inner.tasks[cur].munmap_program(start, len)
+    }
 
-    /// Switch current `Running` task to the task we have found,
+    /// Switch current `Running` tsk to the tsk we have found,
     /// or there is no `Ready` task and we can exit with all applications completed
     fn run_next_task(&self) {
         if let Some(next) = self.find_next_task() {
@@ -179,6 +195,7 @@ fn mark_current_exited() {
 /// Suspend the current 'Running' task and run the next task in task list.
 pub fn suspend_current_and_run_next() {
     mark_current_suspended();
+    
     run_next_task();
 }
 
@@ -201,4 +218,31 @@ pub fn current_trap_cx() -> &'static mut TrapContext {
 /// Change the current 'Running' task's program break
 pub fn change_program_brk(size: i32) -> Option<usize> {
     TASK_MANAGER.change_current_program_brk(size)
+}
+/// mmap the current 'Running' task
+pub fn mmap_program(start: usize, len: usize, port: usize) -> Option<usize> {
+    TASK_MANAGER.mmap_current_program(start, len, port)
+}
+/// munmap the current 'Running' task
+pub fn munmap_program(start: usize, len: usize) -> Option<usize> {
+    TASK_MANAGER.munmap_current_program(start, len)
+}
+/// update current task's task info for syscall times
+pub fn update_current_syscall_times(syscall_id: usize) {
+    let mut inner = TASK_MANAGER.inner.exclusive_access();
+    let current_task = inner.current_task;
+    let task0 = &mut inner.tasks[current_task];
+    task0.syscall_times[syscall_id] += 1;
+}
+/// get curretn task info
+pub fn get_current_task_info() -> TaskInfo {
+    let mut inner = TASK_MANAGER.inner.exclusive_access();
+    let current_task = inner.current_task;
+    let task0 = &mut inner.tasks[current_task];
+    let current_time = get_time_ms();
+    TaskInfo {
+        status: task0.task_status,
+        syscall_times: task0.syscall_times,
+        time: current_time - task0.time,
+    }
 }

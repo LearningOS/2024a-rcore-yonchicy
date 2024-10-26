@@ -227,6 +227,16 @@ where
     pub fn get_end(&self) -> T {
         self.r
     }
+    pub fn intersection(&self, other: &SimpleRange<T>) -> Option<SimpleRange<T>> {
+        let max_start:T = if self.get_start() >= other.get_start() { self.get_start()} else{ other.get_start()};
+        let min_end:T = if self.get_end() <= other.get_end() { self.get_end()} else{ other.get_end()};
+        
+        if max_start < min_end {
+            Some(Self::new(max_start, min_end))
+        } else {
+            None
+        }
+    }
 }
 impl<T> IntoIterator for SimpleRange<T>
 where

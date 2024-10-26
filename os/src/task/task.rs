@@ -1,6 +1,6 @@
 //! Types related to task management
 use super::TaskContext;
-use crate::config::TRAP_CONTEXT_BASE;
+use crate::config::{MAX_SYSCALL_NUM, TRAP_CONTEXT_BASE};
 use crate::mm::{
     kernel_stack_position, MapPermission, MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE,
 };
@@ -28,6 +28,12 @@ pub struct TaskControlBlock {
 
     /// Program break
     pub program_brk: usize,
+
+    /// syscall times
+    pub syscall_times: [u32; MAX_SYSCALL_NUM],
+
+    /// time
+    pub time: usize,
 }
 
 impl TaskControlBlock {
@@ -63,6 +69,8 @@ impl TaskControlBlock {
             base_size: user_sp,
             heap_bottom: user_sp,
             program_brk: user_sp,
+            syscall_times: [0u32; MAX_SYSCALL_NUM],
+            time: 0,
         };
         // prepare TrapContext in user space
         let trap_cx = task_control_block.get_trap_cx();
@@ -95,6 +103,49 @@ impl TaskControlBlock {
         } else {
             None
         }
+    }
+    /// mmap
+    pub fn mmap_program(&mut self, start: usize, len: usize, port: usize) -> Option<usize> {
+        let mut map_per = MapPermission::U;
+
+        if (port & !0x7 == 0) && (port & 0x7 != 0) {
+            if port & 0x1 != 0 {
+                map_per |= MapPermission::R;
+            }
+
+            if port & 0x2 != 0 {
+                map_per |= MapPermission::W;
+            }
+            if port & 0x4 != 0 {
+                map_per |= MapPermission::X;
+            }
+
+            if self
+                .memory_set
+                .mmap(VirtAddr(start), VirtAddr(start + len), map_per)
+                .is_some()
+            {
+                trace!("tcb mmap_program sucess");
+                Some(len)
+            } else {
+                error!("tcb mmap_program failed");
+                None
+            }
+        } else {
+            error!("tcb mmap_program failed");
+            None
+        }
+    }
+    /// munmap program
+    pub fn munmap_program(&mut self, start: usize, len: usize) -> Option<usize> {
+        trace!("tcb munmap_program");
+        if self.memory_set.munmap(VirtAddr(start), VirtAddr(start+len)).is_some(){
+            Some(0)
+        }
+        else {
+            None
+        }
+
     }
 }
 
