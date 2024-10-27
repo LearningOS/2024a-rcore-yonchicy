@@ -1,8 +1,10 @@
 //! Types related to task management & Functions for completely changing TCB
 use super::TaskContext;
 use super::{kstack_alloc, pid_alloc, KernelStack, PidHandle};
-use crate::config::TRAP_CONTEXT_BASE;
-use crate::mm::{MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
+use crate::config::{MAX_SYSCALL_NUM, TRAP_CONTEXT_BASE};
+use crate::timer::get_time_ms;
+use crate::syscall::TaskInfo;
+use crate::mm::{MapPermission, MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
 use crate::sync::UPSafeCell;
 use crate::trap::{trap_handler, TrapContext};
 use alloc::sync::{Arc, Weak};
@@ -68,6 +70,11 @@ pub struct TaskControlBlockInner {
 
     /// Program break
     pub program_brk: usize,
+    /// syscall times
+    pub syscall_times:[u32; MAX_SYSCALL_NUM],
+
+    /// run time ms
+    pub time: usize,
 }
 
 impl TaskControlBlockInner {
@@ -118,6 +125,8 @@ impl TaskControlBlock {
                     exit_code: 0,
                     heap_bottom: user_sp,
                     program_brk: user_sp,
+                    syscall_times: [0; MAX_SYSCALL_NUM],
+                    time: 0,
                 })
             },
         };
@@ -191,6 +200,8 @@ impl TaskControlBlock {
                     exit_code: 0,
                     heap_bottom: parent_inner.heap_bottom,
                     program_brk: parent_inner.program_brk,
+                    syscall_times: [0;MAX_SYSCALL_NUM],
+                    time:0
                 })
             },
         });
@@ -209,6 +220,67 @@ impl TaskControlBlock {
     /// get pid of process
     pub fn getpid(&self) -> usize {
         self.pid.0
+    }
+
+    /// get task info
+    pub fn get_task_info(&self) -> TaskInfo {
+        let inner = self.inner_exclusive_access();
+
+        return TaskInfo {
+            status: inner.get_status(),
+            syscall_times: inner.syscall_times,
+            time: get_time_ms() - inner.time,
+        };
+
+
+    }
+    /// update syscall times
+    pub fn update_syscall_times(&self, syscall_id: usize) {
+        let mut inner = self.inner_exclusive_access();
+        inner.syscall_times[syscall_id]+=1;
+    }
+    /// mmap
+    pub fn mmap_program(&self, start: usize, len: usize, port: usize) -> Option<usize> {
+        let mut map_per = MapPermission::U;
+
+        if (port & !0x7 == 0) && (port & 0x7 != 0) {
+            if port & 0x1 != 0 {
+                map_per |= MapPermission::R;
+            }
+
+            if port & 0x2 != 0 {
+                map_per |= MapPermission::W;
+            }
+            if port & 0x4 != 0 {
+                map_per |= MapPermission::X;
+            }
+
+            if self.inner_exclusive_access()
+                .memory_set
+                .mmap(VirtAddr(start), VirtAddr(start + len), map_per)
+                .is_some()
+            {
+                trace!("tcb mmap_program sucess");
+                Some(len)
+            } else {
+                error!("tcb mmap_program failed");
+                None
+            }
+        } else {
+            error!("tcb mmap_program failed");
+            None
+        }
+    }
+    /// munmap program
+    pub fn munmap_program(&self, start: usize, len: usize) -> Option<usize> {
+        trace!("tcb munmap_program");
+        if self.inner_exclusive_access().memory_set.munmap(VirtAddr(start), VirtAddr(start+len)).is_some(){
+            Some(0)
+        }
+        else {
+            None
+        }
+
     }
 
     /// change the location of the program break. return None if failed.
