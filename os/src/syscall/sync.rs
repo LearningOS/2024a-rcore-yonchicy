@@ -247,5 +247,12 @@ pub fn sys_condvar_wait(condvar_id: usize, mutex_id: usize) -> isize {
 /// YOUR JOB: Implement deadlock detection, but might not all in this syscall
 pub fn sys_enable_deadlock_detect(_enabled: usize) -> isize {
     trace!("kernel: sys_enable_deadlock_detect NOT IMPLEMENTED");
-    -1
+    if _enabled == 1 || _enabled == 0 {
+        current_process()
+            .inner_exclusive_access()
+            .deadlock_detection_enabled = _enabled == 1;
+        0
+    } else {
+        -1
+    }
 }
