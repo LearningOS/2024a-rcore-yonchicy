@@ -2,9 +2,9 @@
 
 use super::id::RecycleAllocator;
 use super::manager::insert_into_pid2process;
-use super::TaskControlBlock;
-use super::{add_task, SignalFlags};
+use super::{add_task, current_task, SignalFlags};
 use super::{pid_alloc, PidHandle};
+use super::{TaskControlBlock, TaskStatus};
 use crate::fs::{File, Stdin, Stdout};
 use crate::mm::{translated_refmut, MemorySet, KERNEL_SPACE};
 use crate::sync::{Condvar, Mutex, Semaphore, UPSafeCell};
@@ -285,5 +285,104 @@ impl ProcessControlBlock {
     /// get pid
     pub fn getpid(&self) -> usize {
         self.pid.0
+    }
+    /// check if will deadlock
+    pub fn will_mutex_deadlock(&self, mutex_id: usize) -> bool {
+        let inner = self.inner_exclusive_access();
+        if inner.deadlock_detection_enabled {
+            let workers_blocked: Vec<bool> = inner
+                .tasks
+                .iter()
+                .map(|task| {
+                    let task_inner = task.as_ref().unwrap().inner_exclusive_access();
+                    if task_inner.task_status == TaskStatus::Blocked {
+                        true
+                    } else {
+                        false
+                    }
+                })
+                .collect();
+            let mutex_locked: Vec<bool> = inner
+                .mutex_list
+                .iter()
+                .map(|mutex| {
+                    if mutex.as_ref().unwrap().is_locked() {
+                        true
+                    } else {
+                        false
+                    }
+                })
+                .collect();
+
+            if mutex_locked[mutex_id] {
+                let locker = inner.mutex_list[mutex_id]
+                    .as_ref()
+                    .unwrap()
+                    .get_locker()
+                    .unwrap();
+                if locker
+                    != current_task()
+                        .unwrap()
+                        .inner_exclusive_access()
+                        .res
+                        .as_ref()
+                        .unwrap()
+                        .tid
+                    && !workers_blocked[locker]
+                {
+                    return false;
+                } else {
+                    return true;
+                }
+            }
+
+            false
+        } else {
+            false
+        }
+    }
+    /// check if will deadlock
+    pub fn will_sem_deadlock(&self, sem_id: usize) -> bool {
+        let inner = self.inner_exclusive_access();
+        if inner.deadlock_detection_enabled {
+            //let workers_blocked: Vec<bool> = inner
+            //    .tasks
+            //    .iter()
+            //    .map(|task| {
+            //        let task_inner = task.as_ref().unwrap().inner_exclusive_access();
+            //        if task_inner.task_status == TaskStatus::Blocked {
+            //            true
+            //        } else {
+            //            false
+            //        }
+            //    })
+            //    .collect();
+            let available_sems: Vec<isize> = inner
+                .semaphore_list
+                .iter()
+                .map(|sem| sem.as_ref().unwrap().get_count())
+                .collect();
+            warn!("available_sems {:?}", available_sems);
+            if available_sems[sem_id] <= 0
+                && !inner.tasks.iter().any(|task| {
+                    let task_inner = task.as_ref().unwrap().inner_exclusive_access();
+                    task_inner.task_status != TaskStatus::Blocked
+                        && task_inner.res.as_ref().unwrap().tid
+                            != current_task()
+                                .unwrap()
+                                .inner_exclusive_access()
+                                .res
+                                .as_ref()
+                                .unwrap()
+                                .tid
+                })
+            {
+                return true;
+            } else {
+                return false;
+            }
+        } else {
+            false
+        }
     }
 }

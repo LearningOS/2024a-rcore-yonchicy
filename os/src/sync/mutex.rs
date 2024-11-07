@@ -2,7 +2,7 @@
 
 use super::UPSafeCell;
 use crate::task::TaskControlBlock;
-use crate::task::{block_current_and_run_next, suspend_current_and_run_next};
+use crate::task::block_current_and_run_next;
 use crate::task::{current_task, wakeup_task};
 use alloc::{collections::VecDeque, sync::Arc};
 
@@ -12,45 +12,50 @@ pub trait Mutex: Sync + Send {
     fn lock(&self);
     /// Unlock the mutex
     fn unlock(&self);
+    /// get locker tid
+    fn get_locker(&self) -> Option<usize>;
+    /// if locked
+    fn is_locked(&self) -> bool ;
 }
 
 /// Spinlock Mutex struct
-pub struct MutexSpin {
-    locked: UPSafeCell<bool>,
-}
-
-impl MutexSpin {
-    /// Create a new spinlock mutex
-    pub fn new() -> Self {
-        Self {
-            locked: unsafe { UPSafeCell::new(false) },
-        }
-    }
-}
-
-impl Mutex for MutexSpin {
-    /// Lock the spinlock mutex
-    fn lock(&self) {
-        trace!("kernel: MutexSpin::lock");
-        loop {
-            let mut locked = self.locked.exclusive_access();
-            if *locked {
-                drop(locked);
-                suspend_current_and_run_next();
-                continue;
-            } else {
-                *locked = true;
-                return;
-            }
-        }
-    }
-
-    fn unlock(&self) {
-        trace!("kernel: MutexSpin::unlock");
-        let mut locked = self.locked.exclusive_access();
-        *locked = false;
-    }
-}
+//#[allow(dead_code)]
+//pub struct MutexSpin {
+//    locked: UPSafeCell<bool>,
+//}
+//
+//impl MutexSpin {
+//    /// Create a new spinlock mutex
+//    pub fn new() -> Self {
+//        Self {
+//            locked: unsafe { UPSafeCell::new(false) },
+//        }
+//    }
+//}
+//
+//impl Mutex for MutexSpin {
+//    /// Lock the spinlock mutex
+//    fn lock(&self) {
+//        trace!("kernel: MutexSpin::lock");
+//        loop {
+//            let mut locked = self.locked.exclusive_access();
+//            if *locked {
+//                drop(locked);
+//                suspend_current_and_run_next();
+//                continue;
+//            } else {
+//                *locked = true;
+//                return;
+//            }
+//        }
+//    }
+//
+//    fn unlock(&self) {
+//        trace!("kernel: MutexSpin::unlock");
+//        let mut locked = self.locked.exclusive_access();
+//        *locked = false;
+//    }
+//}
 
 /// Blocking Mutex struct
 pub struct MutexBlocking {
@@ -59,6 +64,7 @@ pub struct MutexBlocking {
 
 pub struct MutexBlockingInner {
     locked: bool,
+    locker: Option<usize>,
     wait_queue: VecDeque<Arc<TaskControlBlock>>,
 }
 
@@ -71,6 +77,7 @@ impl MutexBlocking {
                 UPSafeCell::new(MutexBlockingInner {
                     locked: false,
                     wait_queue: VecDeque::new(),
+                    locker: None,
                 })
             },
         }
@@ -88,6 +95,15 @@ impl Mutex for MutexBlocking {
             block_current_and_run_next();
         } else {
             mutex_inner.locked = true;
+            mutex_inner.locker = Some(
+                current_task()
+                    .unwrap()
+                    .inner_exclusive_access()
+                    .res
+                    .as_ref()
+                    .unwrap()
+                    .tid,
+            );
         }
     }
 
@@ -101,5 +117,13 @@ impl Mutex for MutexBlocking {
         } else {
             mutex_inner.locked = false;
         }
+    }
+
+    fn get_locker(&self) -> Option<usize> {
+        self.inner.exclusive_access().locker
+    }
+
+    fn is_locked(&self) -> bool  {
+        self.inner.exclusive_access().locked
     }
 }
