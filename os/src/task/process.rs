@@ -343,20 +343,22 @@ impl ProcessControlBlock {
     }
     /// check if will deadlock
     pub fn will_sem_deadlock(&self, sem_id: usize) -> bool {
+        let current_tid = current_task().unwrap().inner_exclusive_access().res.as_ref().unwrap().tid;
         let inner = self.inner_exclusive_access();
         if inner.deadlock_detection_enabled {
-            //let workers_blocked: Vec<bool> = inner
-            //    .tasks
-            //    .iter()
-            //    .map(|task| {
-            //        let task_inner = task.as_ref().unwrap().inner_exclusive_access();
-            //        if task_inner.task_status == TaskStatus::Blocked {
-            //            true
-            //        } else {
-            //            false
-            //        }
-            //    })
-            //    .collect();
+            let workers_blocked: Vec<bool> = inner
+                .tasks
+                .iter()
+                .map(|task| {
+                    let task_inner = task.as_ref().unwrap().inner_exclusive_access();
+                    if task_inner.task_status == TaskStatus::Blocked {
+                        true
+                    } else {
+                        false
+                    }
+                })
+                .collect();
+            warn!("workers_blocked {:?}", workers_blocked);
             let available_sems: Vec<isize> = inner
                 .semaphore_list
                 .iter()
@@ -368,20 +370,17 @@ impl ProcessControlBlock {
                     let task_inner = task.as_ref().unwrap().inner_exclusive_access();
                     task_inner.task_status != TaskStatus::Blocked
                         && task_inner.res.as_ref().unwrap().tid
-                            != current_task()
-                                .unwrap()
-                                .inner_exclusive_access()
-                                .res
-                                .as_ref()
-                                .unwrap()
-                                .tid
+                            != current_tid && task_inner.sems_id.len() > 0
                 })
             {
+                warn!("checking dead lock1");
                 return true;
             } else {
+                warn!("checking dead lock2");
                 return false;
             }
         } else {
+                warn!("checking dead lock3");
             false
         }
     }

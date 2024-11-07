@@ -134,8 +134,8 @@ pub fn sys_semaphore_create(res_count: usize) -> isize {
 }
 /// semaphore up syscall
 pub fn sys_semaphore_up(sem_id: usize) -> isize {
-    trace!(
-        "kernel:pid[{}] tid[{}] sys_semaphore_up",
+    warn!(
+        "kernel:pid[{}] tid[{}] sys_semaphore_up {}",
         current_task().unwrap().process.upgrade().unwrap().getpid(),
         current_task()
             .unwrap()
@@ -143,13 +143,16 @@ pub fn sys_semaphore_up(sem_id: usize) -> isize {
             .res
             .as_ref()
             .unwrap()
-            .tid
+            .tid,
+        sem_id
     );
     let process = current_process();
     let process_inner = process.inner_exclusive_access();
     let sem = Arc::clone(process_inner.semaphore_list[sem_id].as_ref().unwrap());
     drop(process_inner);
     sem.up();
+    drop(process);
+    current_task().unwrap().inner_exclusive_access().sems_id.retain(|&x| x != sem_id);
     0
 }
 /// semaphore down syscall
@@ -170,12 +173,15 @@ pub fn sys_semaphore_down(sem_id: usize) -> isize {
     let process_inner = process.inner_exclusive_access();
     let sem = Arc::clone(process_inner.semaphore_list[sem_id].as_ref().unwrap());
     drop(process_inner);
+    warn!("checking dead lock");
     if process.will_sem_deadlock(sem_id) {
         error!("dead lock happened");
         -0xdead
     } else {
         drop(process);
         sem.down();
+        warn!("pushing sem id when down");
+        current_task().unwrap().inner_exclusive_access().sems_id.push(sem_id);
         0
     }
 }
